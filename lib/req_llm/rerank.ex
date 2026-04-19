@@ -478,31 +478,33 @@ defmodule ReqLLM.Rerank do
   defp merge_meta(metas, batch_count, usages) do
     normalized_metas = Enum.reject(metas, &is_nil/1)
 
-    acc = %{input_cost: 0, output_cost: 0, total_cost: 0}
-
-    cost =
-      Enum.reduce(usages, acc, fn usage, acc ->
-        case usage do
-          %{input_cost: input_cost, output_cost: output_cost, total_cost: total_cost} ->
-            %{
-              input_cost: acc.input_cost + (input_cost || 0),
-              output_cost: acc.output_cost + (output_cost || 0),
-              total_cost: acc.total_cost + (total_cost || 0)
-            }
-
-          _ ->
-            acc
-        end
-      end)
-
     %{}
     |> maybe_put(:billed_units, merge_numeric_field(normalized_metas, :billed_units))
     |> maybe_put(:tokens, merge_numeric_field(normalized_metas, :tokens))
     |> maybe_put(:cached_tokens, sum_scalar_field(normalized_metas, :cached_tokens))
     |> maybe_put(:warnings, merge_warnings(normalized_metas))
     |> Map.put(:batch_count, batch_count)
-    |> Map.merge(cost)
+    |> Map.merge(merge_costs(usages))
   end
+
+  defp merge_costs(usages) do
+    Enum.reduce(usages, %{}, fn usage, acc ->
+      acc
+      |> maybe_sum_cost(usage, :input_cost)
+      |> maybe_sum_cost(usage, :output_cost)
+      |> maybe_sum_cost(usage, :reasoning_cost)
+      |> maybe_sum_cost(usage, :total_cost)
+    end)
+  end
+
+  defp maybe_sum_cost(acc, usage, field) when is_map(usage) do
+    case fetch_value(usage, field) do
+      value when is_number(value) -> Map.update(acc, field, value, &(&1 + value))
+      _ -> acc
+    end
+  end
+
+  defp maybe_sum_cost(acc, _usage, _field), do: acc
 
   defp merge_numeric_field(metas, field) do
     metas
