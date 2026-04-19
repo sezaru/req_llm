@@ -260,9 +260,9 @@ defmodule ReqLLM.Rerank do
              %{query: query, documents: documents},
              opts
            ),
-         {:ok, %Req.Response{status: status, body: body}} when status in 200..299 <-
+         {:ok, %Req.Response{status: status} = response} when status in 200..299 <-
            Req.request(request) do
-      {:ok, body}
+      {:ok, response}
     else
       {:ok, %Req.Response{status: status, body: body}} ->
         {:error,
@@ -291,19 +291,25 @@ defmodule ReqLLM.Rerank do
       ids = Enum.map(parsed_batches, & &1.id)
       metas = Enum.map(parsed_batches, & &1.meta)
 
+      usages =
+        Enum.map(batch_responses, fn
+          {%Req.Response{private: private}, _offset} -> get_in(private, [:req_llm, :usage])
+          _ -> nil
+        end)
+
       {:ok,
        %RerankResponse{
          id: merge_ids(ids),
          model: model.provider_model_id || model.id,
          query: query,
          results: results,
-         meta: merge_meta(metas, length(parsed_batches))
+         meta: merge_meta(metas, length(parsed_batches), usages)
        }}
     end
   end
 
   defp parse_batch_responses(batch_responses, documents) do
-    Enum.reduce_while(batch_responses, {:ok, []}, fn {body, offset}, {:ok, acc} ->
+    Enum.reduce_while(batch_responses, {:ok, []}, fn {%{body: body}, offset}, {:ok, acc} ->
       case parse_batch_response(body, offset, documents) do
         {:ok, parsed} -> {:cont, {:ok, [parsed | acc]}}
         {:error, error} -> {:halt, {:error, error}}
@@ -469,8 +475,25 @@ defmodule ReqLLM.Rerank do
 
   defp normalize_warnings(_), do: nil
 
-  defp merge_meta(metas, batch_count) do
+  defp merge_meta(metas, batch_count, usages) do
     normalized_metas = Enum.reject(metas, &is_nil/1)
+
+    acc = %{input_cost: 0, output_cost: 0, total_cost: 0}
+
+    cost =
+      Enum.reduce(usages, acc, fn usage, acc ->
+        case usage do
+          %{input_cost: input_cost, output_cost: output_cost, total_cost: total_cost} ->
+            %{
+              input_cost: acc.input_cost + (input_cost || 0),
+              output_cost: acc.output_cost + (output_cost || 0),
+              total_cost: acc.total_cost + (total_cost || 0)
+            }
+
+          _ ->
+            acc
+        end
+      end)
 
     %{}
     |> maybe_put(:billed_units, merge_numeric_field(normalized_metas, :billed_units))
@@ -478,6 +501,7 @@ defmodule ReqLLM.Rerank do
     |> maybe_put(:cached_tokens, sum_scalar_field(normalized_metas, :cached_tokens))
     |> maybe_put(:warnings, merge_warnings(normalized_metas))
     |> Map.put(:batch_count, batch_count)
+    |> Map.merge(cost)
   end
 
   defp merge_numeric_field(metas, field) do

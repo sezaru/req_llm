@@ -168,7 +168,10 @@ defmodule ReqLLM.RerankTest do
                billed_units: %{search_units: 1},
                tokens: %{input_tokens: 12},
                warnings: ["unit-test"],
-               batch_count: 1
+               batch_count: 1,
+               input_cost: 0,
+               output_cost: 0,
+               total_cost: 0
              }
     end
 
@@ -193,7 +196,10 @@ defmodule ReqLLM.RerankTest do
       assert response.meta == %{
                billed_units: %{search_units: 2},
                warnings: ["batch-two"],
-               batch_count: 2
+               batch_count: 2,
+               input_cost: 0,
+               output_cost: 0,
+               total_cost: 0
              }
     end
 
